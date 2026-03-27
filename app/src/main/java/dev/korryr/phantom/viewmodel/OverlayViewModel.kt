@@ -38,7 +38,7 @@ class OverlayViewModel(
         private const val PRE_FETCH_INTERVAL_MS = 2000L
 
         /** Max age of pre-fetched OCR text to consider "fresh" (ms) */
-        private const val PRE_FETCH_FRESHNESS_MS = 3000L
+        private const val PRE_FETCH_FRESHNESS_MS = 1500L
     }
 
     private val _state = MutableStateFlow(OverlayState())
@@ -133,32 +133,41 @@ class OverlayViewModel(
 
         captureJob = scope.launch {
             try {
-                // ── Phase 1: Get OCR text (pre-fetched or fresh) ────────────────
+                // ── Phase 1: Get OCR text (prefer fresh, fallback to pre-fetched) ──
                 val ageMs = System.currentTimeMillis() - preFetchedAtMs
-                val text: String
-
-                if (preFetchedText.length >= MIN_QUESTION_LENGTH && ageMs < PRE_FETCH_FRESHNESS_MS) {
-                    // Pre-fetched text is fresh — skip capture + OCR entirely
-                    text = preFetchedText
-                    Timber.i("Using pre-fetched OCR (${ageMs}ms old, ${text.length} chars)")
+                val cachedText = if (preFetchedText.length >= MIN_QUESTION_LENGTH && ageMs < PRE_FETCH_FRESHNESS_MS) {
+                    preFetchedText
                 } else {
-                    // Fallback: fresh capture + OCR
-                    Timber.d("Pre-fetch stale (${ageMs}ms) — doing fresh OCR")
+                    ""
+                }
+
+                // Always attempt a fresh capture for accuracy
+                val freshText: String = try {
                     val bitmap = withContext(Dispatchers.IO) {
                         screenCaptureManager?.captureFrame()
-                            ?: screenCaptureManager?.captureNextFrame()
                     }
-                    if (bitmap == null) {
-                        _state.value = OverlayState(answer = "Capture failed", isLoading = false)
-                        scanInProgress = false
-                        return@launch
-                    }
-                    Timber.v("Frame captured: ${bitmap.width}x${bitmap.height}")
+                    if (bitmap != null) {
+                        withContext(Dispatchers.IO) {
+                            textRecognitionManager.recognizeText(bitmap)
+                        }
+                    } else ""
+                } catch (e: Exception) {
+                    Timber.w(e, "Fresh capture failed, using cached")
+                    ""
+                }
 
-                    text = withContext(Dispatchers.IO) {
-                        textRecognitionManager.recognizeText(bitmap)
-                    }
-                    Timber.d("Fresh OCR (${text.length} chars): ${text.take(100)}")
+                // Pick the longer (more complete) OCR result
+                val text = if (freshText.length >= cachedText.length && freshText.length >= MIN_QUESTION_LENGTH) {
+                    Timber.i("Using fresh OCR (${freshText.length} chars)")
+                    freshText
+                } else if (cachedText.length >= MIN_QUESTION_LENGTH) {
+                    Timber.i("Using pre-fetched OCR (${ageMs}ms old, ${cachedText.length} chars)")
+                    cachedText
+                } else {
+                    Timber.w("Both OCR results too short (fresh=${freshText.length}, cached=${cachedText.length})")
+                    _state.value = OverlayState(answer = "No question found", isLoading = false)
+                    scanInProgress = false
+                    return@launch
                 }
 
                 if (text.length < MIN_QUESTION_LENGTH) {
