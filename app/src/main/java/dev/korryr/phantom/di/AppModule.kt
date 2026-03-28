@@ -18,10 +18,13 @@ object AppModule {
     @Singleton
     fun provideOkHttpClient(): OkHttpClient {
         return OkHttpClient.Builder()
-            .connectTimeout(1, TimeUnit.SECONDS)     // Fast failure on unreachable host
-            .readTimeout(8, TimeUnit.SECONDS)         // Streaming: chunks arrive over time
+            // FIX: Was 1s — too aggressive. On a throttled connection (Safaricom FUP, etc.)
+            // the TCP handshake to api.groq.com can take 1-2s, causing immediate failure.
+            // 3s is a better balance between fast failure and real-world network tolerance.
+            .connectTimeout(3, TimeUnit.SECONDS)
+            .readTimeout(8, TimeUnit.SECONDS)   // Streaming: chunks arrive over time
             .writeTimeout(3, TimeUnit.SECONDS)
-            // Keep connections alive to skip TCP+TLS handshake on repeat requests
+            // Keep TCP connections alive — skip handshake on repeat requests
             .connectionPool(ConnectionPool(5, 5, TimeUnit.MINUTES))
             .build()
     }
