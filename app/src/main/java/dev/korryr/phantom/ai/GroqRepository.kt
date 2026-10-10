@@ -29,8 +29,8 @@ class GroqRepository @Inject constructor(
     companion object {
         private const val BASE_URL = "https://api.groq.com/openai/v1/chat/completions"
 
-        // llama-3.3-70b-versatile: best accuracy for knowledge-based multiple choice
-        private const val MODEL = "llama-3.3-70b-versatile"
+        // qwen/qwen3.8-27b: ultra-fast low-latency quiz answer extraction on Groq
+        private const val MODEL = "qwen/qwen3.8-27b"
 
         // FIX: Was 600 — too small. A question (≈100 chars) + 4 options (≈50 chars each)
         // easily exceeds 600. Option D was silently dropped, forcing Groq to guess from 3.
@@ -53,7 +53,7 @@ class GroqRepository @Inject constructor(
      * - max_tokens raised to 50 so longer answer options don't get cut mid-word
      */
     private val systemPrompt = """
-        You are a precision quiz-answer extractor. You receive raw OCR text captured from a quiz or exam screen. The text may contain OCR noise, typos, or screen-capture artifacts.
+        You are a precision quiz-answer extractor. You receive raw OCR text captured from a quiz or trivia screen. The text may contain OCR noise, typos, or screen-capture artifacts.
 
         YOUR JOB:
         1. Identify the quiz question (usually ends with "?" or is an incomplete statement).

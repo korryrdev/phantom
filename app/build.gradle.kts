@@ -14,12 +14,12 @@ val localProperties = Properties().apply {
 
 android {
     namespace = "dev.korryr.phantom"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "dev.korryr.phantom"
         minSdk = 26
-        targetSdk = 36
+        targetSdk = 37
         versionCode = 1
         versionName = "1.0"
 
