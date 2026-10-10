@@ -1,7 +1,6 @@
 package dev.korryr.phantom.ai
 
 import dev.korryr.phantom.BuildConfig
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
@@ -22,6 +21,7 @@ import java.io.IOException
 import javax.inject.Inject
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
+import kotlinx.coroutines.Dispatchers
 
 class GroqRepository @Inject constructor(
     private val client: OkHttpClient
@@ -29,41 +29,82 @@ class GroqRepository @Inject constructor(
     companion object {
         private const val BASE_URL = "https://api.groq.com/openai/v1/chat/completions"
 
-        // llama-3.3-70b-versatile: smarter model for better answer accuracy
-        private const val MODEL = "llama-3.3-70b-versatile"
+        // qwen/qwen3.8-27b: ultra-fast low-latency quiz answer extraction on Groq
+        private const val MODEL = "qwen/qwen3.8-27b"
 
-        // Keep OCR text short so the model processes it faster and with less noise
-        private const val MAX_OCR_CHARS = 600
+        // FIX: Was 600 — too small. A question (≈100 chars) + 4 options (≈50 chars each)
+        // easily exceeds 600. Option D was silently dropped, forcing Groq to guess from 3.
+        // 1200 comfortably fits any quiz screen's content.
+        private const val MAX_OCR_CHARS = 1200
+
+        // Matches common OCR noise patterns for filtering
+        private val TIMESTAMP_REGEX    = Regex("^\\d{1,2}:\\d{2}(\\s*[AaPpMm]{2})?$")
+        private val BATTERY_REGEX      = Regex("^\\d{1,3}%$")
+        private val SINGLE_CHAR_REGEX  = Regex("^[^a-zA-Z0-9]?$")
     }
 
+    /**
+     * REWRITTEN prompt — v2.
+     *
+     * Changes from v1:
+     * - Explicitly handles A/B/C/D labeled options, True/False, and unlabeled options
+     * - Instructs the model to strip OCR noise (timestamps, battery %, notification icons)
+     * - Tightened output format rules: zero preamble, exact text only
+     * - max_tokens raised to 50 so longer answer options don't get cut mid-word
+     */
     private val systemPrompt = """
-        You answer multiple-choice trivia questions from OCR screen captures.
+        You are a precision quiz-answer extractor. You receive raw OCR text captured from a quiz or trivia screen. The text may contain OCR noise, typos, or screen-capture artifacts.
 
-        STEPS:
-        1. Read the OCR text. Identify the QUESTION and the ANSWER OPTIONS (A/B/C/D or numbered choices).
-        2. Determine which option is correct.
-        3. Output ONLY the exact text of that option, copied character-for-character from the input.
+        YOUR JOB:
+        1. Identify the quiz question (usually ends with "?" or is an incomplete statement).
+        2. Identify all answer choices (may be labeled A/B/C/D, 1/2/3/4, True/False, or just listed line by line).
+        3. Using your knowledge, determine which choice is correct.
+        4. Output ONLY the exact text of the correct answer as it appears in the OCR.
 
-        ABSOLUTE RULES:
-        - You MUST select one of the provided answer options. NEVER make up your own wording.
-        - Copy the chosen option EXACTLY as it appears in the OCR text — same spelling, same words, even if there are OCR typos.
-        - Do NOT add any prefix like "Answer:", "The answer is", "Option B:", or any label.
-        - Do NOT explain, do NOT add punctuation, do NOT rephrase.
-        - If there are 4 options like "Paris", "London", "Berlin", "Madrid" and the answer is Paris, output exactly: Paris
-        - If you cannot identify answer options, give a direct factual answer in 4 words max.
-        - ALWAYS answer, even if unsure — pick the best option.
+        STRICT OUTPUT RULES:
+        - Copy the correct answer TEXT exactly — do NOT paraphrase or reword it.
+        - If options are labeled (e.g. "A. Paris" or "B) Rome"), output ONLY the choice text, NOT the label (e.g. "Paris", not "A. Paris") — unless the label itself is the answer.
+        - For True/False questions: output exactly "True" or "False".
+        - Zero preamble: no "The answer is", no "Correct:", no "Option A", no explanation whatsoever.
+        - Ignore OCR noise: timestamps like "9:41", battery indicators like "87%", carrier names, single random characters/symbols.
+        - If the question is unclear due to OCR, still pick the best answer from the visible options.
+        - Maximum 20 words in your response.
     """.trimIndent()
 
     /**
-     * Cleans raw OCR text: removes blank lines, short fragments, and trims to max length.
+     * Cleans raw OCR text before sending to Groq.
+     *
+     * Improvements over v1:
+     * - Filters out timestamp lines (e.g. "9:41", "12:34 PM") — status bar noise
+     * - Filters out battery percentage lines (e.g. "87%") — status bar noise
+     * - Filters out single-character lines (OCR'd icons, bullets that came out as letters)
+     * - Removes consecutive duplicate lines (OCR sometimes reads the same text twice)
+     * - Keeps short lines like "A.", "True", "False" — these are valid answer choices
+     * - Char limit raised to 1200 so options never get silently truncated
      */
-    private fun cleanOcrText(rawOcrText: String): String =
-        rawOcrText
+    private fun cleanOcrText(rawOcrText: String): String {
+        val lines = rawOcrText
             .lines()
             .map { it.trim() }
-            .filter { it.length > 2 }
-            .joinToString("\n")
-            .take(MAX_OCR_CHARS)
+            .filter { line ->
+                line.isNotEmpty() &&
+                !TIMESTAMP_REGEX.matches(line) &&
+                !BATTERY_REGEX.matches(line) &&
+                !SINGLE_CHAR_REGEX.matches(line) &&
+                // Must contain at least one letter or digit (filters pure-symbol noise)
+                line.any { it.isLetterOrDigit() }
+            }
+
+        // Remove consecutive duplicates (OCR sometimes double-reads the same text block)
+        val deduped = mutableListOf<String>()
+        for (line in lines) {
+            if (deduped.isEmpty() || deduped.last() != line) {
+                deduped.add(line)
+            }
+        }
+
+        return deduped.joinToString("\n").take(MAX_OCR_CHARS)
+    }
 
     /**
      * Builds the JSON request body, optionally with streaming enabled.
@@ -82,7 +123,7 @@ class GroqRepository @Inject constructor(
                 })
             })
             put("temperature", 0.0)
-            put("max_tokens", 30)
+            put("max_tokens", 50)  // FIX: was 30 — raised to 50 to handle longer options
             if (stream) put("stream", true)
         }.toString()
 
@@ -102,8 +143,6 @@ class GroqRepository @Inject constructor(
      * Streams the answer from Groq using SSE (Server-Sent Events).
      * Each emission is the ACCUMULATED answer text so far.
      * The final emission is the complete answer.
-     *
-     * This is non-blocking: we use OkHttp's enqueue() instead of execute().
      */
     fun getAnswerStreaming(rawOcrText: String): Flow<String> = callbackFlow {
         val apiKey = BuildConfig.GROQ_API_KEY
@@ -114,7 +153,7 @@ class GroqRepository @Inject constructor(
         }
 
         val cleanedText = cleanOcrText(rawOcrText)
-        Timber.d("Streaming to Groq (${cleanedText.length} chars): ${cleanedText.take(120)}")
+        Timber.d("Streaming to Groq (${cleanedText.length} chars):\n$cleanedText")
 
         val body = buildRequestBody(cleanedText, stream = true)
         val request = buildRequest(body)
@@ -140,31 +179,29 @@ class GroqRepository @Inject constructor(
                     val reader: BufferedReader = response.body!!.source().inputStream().bufferedReader()
                     val accumulated = StringBuilder()
 
-                    reader.forEachLine { line ->
-                        if (!isClosedForSend) {
-                            if (line.startsWith("data: ")) {
-                                val data = line.removePrefix("data: ").trim()
-                                if (data == "[DONE]") return@forEachLine
+                    while (!isClosedForSend) {
+                        val line = reader.readLine() ?: break
+                        if (line.startsWith("data: ")) {
+                            val data = line.removePrefix("data: ").trim()
+                            if (data == "[DONE]") break
 
-                                try {
-                                    val delta = JSONObject(data)
-                                        .getJSONArray("choices")
-                                        .getJSONObject(0)
-                                        .getJSONObject("delta")
+                            try {
+                                val delta = JSONObject(data)
+                                    .getJSONArray("choices")
+                                    .getJSONObject(0)
+                                    .getJSONObject("delta")
 
-                                    if (delta.has("content")) {
-                                        val token = delta.getString("content")
-                                        accumulated.append(token)
-                                        trySend(accumulated.toString().trim())
-                                    }
-                                } catch (e: Exception) {
-                                    Timber.w(e, "Failed to parse SSE chunk: $data")
+                                if (delta.has("content")) {
+                                    val token = delta.getString("content")
+                                    accumulated.append(token)
+                                    trySend(accumulated.toString().trim())
                                 }
+                            } catch (e: Exception) {
+                                Timber.w(e, "Failed to parse SSE chunk: $data")
                             }
                         }
                     }
 
-                    // Ensure we emit the final answer if we got anything
                     if (accumulated.isNotEmpty()) {
                         val finalAnswer = accumulated.toString().trim()
                         Timber.d("Groq streaming complete: $finalAnswer")
@@ -202,7 +239,6 @@ class GroqRepository @Inject constructor(
             val body = buildRequestBody(cleanedText, stream = false)
             val request = buildRequest(body)
 
-            // Non-blocking: bridge OkHttp enqueue to coroutine
             val responseBody = suspendCancellableCoroutine { cont ->
                 val call = client.newCall(request)
                 cont.invokeOnCancellation { call.cancel() }
