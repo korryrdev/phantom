@@ -1,17 +1,28 @@
 # 👻 Phantom
 
-**Phantom** is a lightweight, real-time on-screen AI assistant and trivia HUD for Android. 
+> *Because why lose at trivia night when you have 27 billion parameters whispering answers in your ear?*  
+> *— Built purely for science, obviously.*
 
-It captures screen frames via the Android MediaProjection API, processes questions and options using on-device ML Kit OCR, and queries Groq's high-speed inference engine (`qwen/qwen3.8-27b`) via Server-Sent Events (SSE) streaming—displaying answers directly on top of other apps in a subtle, non-intrusive floating HUD.
+**Phantom** is a lightweight, real-time on-screen AI assistant and trivia HUD (Heads-Up Display) for Android. 
+
+It captures screen frames via the Android `MediaProjection` API, extracts questions and options using on-device ML Kit OCR, and queries Groq's high-speed inference engine (`qwen/qwen3.8-27b`) via Server-Sent Events (SSE) streaming—displaying answers directly on top of other apps in a subtle, non-intrusive floating HUD.
+
+---
+
+## 🤔 Why does this exist?
+
+1. **Curiosity**: To see if Android's `MediaProjection` + ML Kit + Groq could answer faster than human reaction time *(spoiler: it can)*.
+2. **Engineering**: To test how close to invisible an Android Compose overlay can actually get.
+3. **The real reason**: Definitely not because I kept losing trivia games.
 
 ---
 
 ## ⚡ Features
 
 - **Real-Time Screen Capture**: Utilizes Android's `MediaProjection` and `VirtualDisplay` APIs for background screen acquisition.
-- **On-Device OCR & Spatial Filtering**: Powered by Google ML Kit Text Recognition with spatial line sorting and noise suppression (status bar artifacts, timestamps, icons).
-- **Ultra-Fast LLM Inference**: Queries Groq's LPUs running `qwen/qwen3.8-27b` with token-by-token streaming via OkHttp and Kotlin Coroutines `Flow`.
-- **Ghost Overlay UI**: Draggable, translucent floating window built with Jetpack Compose (`SYSTEM_ALERT_WINDOW`) that stays out of your way and dims when idle.
+- **On-Device OCR & Noise Eraser**: Powered by Google ML Kit Text Recognition with spatial line sorting and noise suppression (strips timestamps, battery %, and status bar icons so the AI doesn't think `"87%"` is the capital of France).
+- **Reflex-Grade LLM Speed**: Queries Groq's LPUs running `qwen/qwen3.8-27b` with token-by-token streaming via OkHttp and Kotlin Coroutines `Flow`—faster than the quiz countdown timer can stress you out.
+- **Ghost Overlay UI**: Draggable, translucent floating HUD built with Jetpack Compose (`SYSTEM_ALERT_WINDOW`) that dims to near-invisibility when idle so anyone looking over your shoulder just sees you looking like a genius.
 - **Modern Android Architecture**: 100% Kotlin, Jetpack Compose, Coroutines & Flow, Hilt Dependency Injection, and Gradle Version Catalogs.
 
 ---
@@ -85,7 +96,9 @@ It captures screen frames via the Android MediaProjection API, processes questio
 
 ## ⚖️ Disclaimer
 
-Phantom was developed as an educational project and a technical demonstration of real-time on-device computer vision and low-latency cloud LLM streaming on Android. It is intended for learning, experimentation, and assistive research. Please do not use it in competitive, academic, or prohibited environments.
+Phantom was developed as an educational project and a technical demonstration of real-time on-device computer vision and low-latency cloud LLMs on Android. It is intended for learning, experimentation, and assistive research.
+
+If you use this to completely destroy your friends on trivia night, that is strictly between you, your conscience, and your group chat.
 
 ---
 
