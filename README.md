@@ -51,7 +51,7 @@ It captures screen frames via the Android MediaProjection API, processes questio
 
 1. **Clone the repository:**
    ```bash
-   git clone https://github.com/DevKorrir/phantom.git
+   git clone https://github.com/korryrdev/phantom.git
    cd phantom
    ```
 
